@@ -1,10 +1,11 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import datetime
 import time
 import random
 import re
-from typing import List, Dict, Tuple, Optional  # ✅ Optional for Py<3.10 compatibility
+from typing import List, Dict, Tuple, Optional  # Optional for Py<3.10 compatibility
 
 # -------------------- PAGE CONFIG --------------------
 st.set_page_config(
@@ -109,40 +110,41 @@ DISEASES = {
 
 # -------------------- VOICE (BROWSER TTS) --------------------
 def speak(text: str, autostart: bool = False, rate: float = 1.0, pitch: float = 1.0):
-    safe = (text or "").replace("\\","\\\\").replace("`","\\`")
+    # Use browser Web Speech API. Avoid f-strings with braces to prevent syntax issues.
+    safe = (text or "").replace("\\", "\\\\").replace("`", "\\`")
     auto_js = "true" if autostart else "false"
-    st.components.v1.html(f"""
+    js = """
     <div>
-      <button onclick="speakNow()" style="
-        border:none;border-radius:10px;padding:6px 10px;margin:6px 0;
-        background:#0074D9;color:white;cursor:pointer;">🔊 Speak</button>
+      <button onclick="speakNow()" style="border:none;border-radius:10px;padding:6px 10px;margin:6px 0;background:#0074D9;color:white;cursor:pointer;">🔊 Speak</button>
     </div>
     <script>
-      const txt = `{safe}`;
+      const txt = `__SAFE__`;
       function speakNow(){ 
-        try {{
+        try {
           const u = new SpeechSynthesisUtterance(txt);
-          u.rate = {rate};
-          u.pitch = {pitch};
+          u.rate = __RATE__;
+          u.pitch = __PITCH__;
           u.lang = 'en-US';
           window.speechSynthesis.cancel();
           window.speechSynthesis.speak(u);
-        }} catch(e) {{ console.log(e); }}
+        } catch(e) { console.log(e); }
       }
-      if ({auto_js}) {{
-        setTimeout(() => {{
-          try {{
+      if (__AUTO__) {
+        setTimeout(() => {
+          try {
             const u = new SpeechSynthesisUtterance(txt);
-            u.rate = {rate};
-            u.pitch = {pitch};
+            u.rate = __RATE__;
+            u.pitch = __PITCH__;
             u.lang = 'en-US';
             window.speechSynthesis.cancel();
             window.speechSynthesis.speak(u);
-          }} catch(e) {{}}
-        }}, 100);
-      }}
+          } catch(e) {}
+        }, 100);
+      }
     </script>
-    """, height=60)
+    """
+    js = js.replace("__SAFE__", safe).replace("__RATE__", str(rate)).replace("__PITCH__", str(pitch)).replace("__AUTO__", auto_js)
+    st.components.v1.html(js, height=80)
 
 # -------------------- CHAT HELPERS --------------------
 def add_doctor(msg: str):
@@ -226,7 +228,6 @@ def generate_diagnosis(symptoms: Dict) -> List[Tuple]:
     possible.sort(key=lambda x: x[4], reverse=True)
     return possible
 
-# ✅ FIXED: Python 3.8/3.9 compatible signature (Optional[str] instead of str | None)
 def build_treatment_plan(risk: str, top_disease: Optional[str]) -> Dict:
     plans = {
         "high": {
