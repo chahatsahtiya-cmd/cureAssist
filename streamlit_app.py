@@ -3,8 +3,8 @@ import pandas as pd
 import datetime
 import time
 import random
-from typing import List, Dict, Tuple
 import re
+from typing import List, Dict, Tuple, Optional  # ✅ Optional for Py<3.10 compatibility
 
 # -------------------- PAGE CONFIG --------------------
 st.set_page_config(
@@ -14,70 +14,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --------- UTIL: compatibility for older Streamlit versions ---------
+def ui_toggle(label, value=False):
+    try:
+        return st.toggle(label, value=value)  # Streamlit >= 1.25
+    except Exception:
+        return st.checkbox(label, value=value)  # Fallback
+
+def do_rerun():
+    try:
+        st.rerun()  # Streamlit >= 1.28
+    except Exception:
+        st.experimental_rerun()  # Fallback
+
 # -------------------- THEME / CSS --------------------
 st.markdown("""
 <style>
-/* gradient background for main block area only */
-.block-container {
-  padding-top: 1.5rem !important;
-}
-.ec-card {
-  background: #ffffff;
-  border-radius: 16px;
-  padding: 1.0rem 1.2rem;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-  margin-bottom: 1rem;
-}
-.ec-chip {
-  display: inline-block;
-  padding: 0.25rem 0.6rem;
-  border-radius: 999px;
-  background: #E8F4F8;
-  color: #2E86AB;
-  font-size: 0.85rem;
-  margin-right: 0.5rem;
-}
-.ec-doctor {
-  background: #E8F4F8;
-  border-left: 6px solid #2E86AB;
-  border-radius: 12px;
-  padding: 0.9rem 1rem;
-  margin-bottom: 0.6rem;
-  font-size: 1.02rem;
-}
-.ec-user {
-  background: #F0F7EE;
-  border-left: 6px solid #3DAB6D;
-  border-radius: 12px;
-  padding: 0.9rem 1rem;
-  margin-bottom: 0.6rem;
-  font-size: 1.02rem;
-}
-.ec-title {
-  color: #0074D9;
-  margin: 0.25rem 0 0.6rem 0;
-}
-.ec-hero {
-  text-align:center;
-  padding: 1rem 0 0.5rem;
-}
-.ec-hero h1 {
-  color:#0074D9; margin-bottom:0.25rem;
-}
-.ec-hero p { color:#0f172a; opacity:0.8; }
-.ec-kicker { font-size:0.95rem; opacity:0.9; }
-.stButton > button {
-  background-color:#0074D9 !important; color:white !important;
-  border:none; border-radius:10px; padding:0.55rem 1.0rem;
-  transition: all .2s ease;
-}
-.stButton > button:hover { background-color:#005BB7 !important; }
-.ec-reminder {
-  background:#FFF4E5; border-left:4px solid #FFA500; border-radius:10px;
-  padding:0.6rem 0.75rem; margin-bottom:0.6rem;
-}
-.small { font-size:0.9rem; opacity:0.85; }
-.ec-footer { font-size:0.85rem; opacity:0.75; margin-top:0.75rem; }
+.block-container { padding-top: 1.5rem !important; }
+.ec-card { background:#fff;border-radius:16px;padding:1rem 1.2rem;box-shadow:0 6px 18px rgba(0,0,0,0.08);margin-bottom:1rem; }
+.ec-doctor { background:#E8F4F8;border-left:6px solid #2E86AB;border-radius:12px;padding:0.9rem 1rem;margin-bottom:0.6rem;font-size:1.02rem; }
+.ec-user { background:#F0F7EE;border-left:6px solid #3DAB6D;border-radius:12px;padding:0.9rem 1rem;margin-bottom:0.6rem;font-size:1.02rem; }
+.ec-title { color:#0074D9;margin:.25rem 0 .6rem 0; }
+.ec-hero { text-align:center;padding:1rem 0 .5rem; }
+.ec-hero h1 { color:#0074D9;margin-bottom:.25rem; }
+.ec-kicker { font-size:.95rem;opacity:.9; }
+.stButton > button { background:#0074D9 !important;color:#fff !important;border:none;border-radius:10px;padding:.55rem 1rem; }
+.stButton > button:hover { background:#005BB7 !important; }
+.ec-footer { font-size:.85rem;opacity:.75;margin-top:.75rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,24 +48,18 @@ st.markdown("""
 def ensure_state():
     ss = st.session_state
     ss.setdefault("page", "home")
-    ss.setdefault("authenticated", True)  # keep simple; no backend auth
+    ss.setdefault("authenticated", True)
     ss.setdefault("user_data", {})
-    ss.setdefault("symptoms", {})           # answers bucket
-    ss.setdefault("chat_history", [])       # list[("doctor"|"user", text)]
-    ss.setdefault("current_idx", 0)         # which question we are on
+    ss.setdefault("symptoms", {})
+    ss.setdefault("chat_history", [])
+    ss.setdefault("current_idx", 0)
     ss.setdefault("treatment_plan", {})
-    ss.setdefault("progress_data", {
-        "start_date": None,
-        "daily_rating": [],     # list of dicts {date, rating}
-        "symptoms_track": [],   # list of dicts {date, symptoms: List[str]}
-        "medication_taken": []  # list of dicts {date, taken: bool}
-    })
-    ss.setdefault("voice_enabled", True)     # browser speech on/off
-    ss.setdefault("last_spoken_n", -1)       # to avoid repeat speech
+    ss.setdefault("progress_data", {"start_date": None, "daily_rating": [], "symptoms_track": [], "medication_taken": []})
+    ss.setdefault("voice_enabled", True)
+    ss.setdefault("last_spoken_n", -1)
 ensure_state()
 
 # -------------------- CONSULTATION STEPS --------------------
-# Each step has: key, prompt, kind in {"text","number","choice"}, optional choices
 STEPS: List[Dict] = [
     {"key":"name", "prompt":"What is your name?", "kind":"text"},
     {"key":"age", "prompt":"How old are you?", "kind":"number", "min":0, "max":120},
@@ -152,10 +109,6 @@ DISEASES = {
 
 # -------------------- VOICE (BROWSER TTS) --------------------
 def speak(text: str, autostart: bool = False, rate: float = 1.0, pitch: float = 1.0):
-    """
-    Uses the browser's Web Speech API. Works on most modern browsers.
-    If autostart is True, it will speak immediately (may require user interaction).
-    """
     safe = (text or "").replace("\\","\\\\").replace("`","\\`")
     auto_js = "true" if autostart else "false"
     st.components.v1.html(f"""
@@ -177,7 +130,6 @@ def speak(text: str, autostart: bool = False, rate: float = 1.0, pitch: float = 
         }} catch(e) {{ console.log(e); }}
       }
       if ({auto_js}) {{
-        // attempt autoplay once
         setTimeout(() => {{
           try {{
             const u = new SpeechSynthesisUtterance(txt);
@@ -208,10 +160,8 @@ def show_chat():
 
 # -------------------- RISK & DIAGNOSIS --------------------
 def assess_risk(symptoms: Dict) -> Tuple[str, int, Dict]:
-    score = 0
-    detail = {}
+    score = 0; detail = {}
 
-    # Age
     age = symptoms.get("age")
     if isinstance(age, (int, float)):
         if age >= 60:
@@ -223,30 +173,22 @@ def assess_risk(symptoms: Dict) -> Tuple[str, int, Dict]:
     else:
         detail["age"] = 0
 
-    # Pre-existing conditions
     if symptoms.get("conditions"):
         score += 2; detail["conditions"] = 2
     else:
         detail["conditions"] = 0
 
-    # Binary symptoms (Yes/No/Not sure)
-    weights = {
-        "fever": 2,
-        "cough_breathing": 3,
-        "body_aches": 1,
-        "loss_taste_smell": 2,
-        "fatigue": 1
-    }
+    weights = {"fever":2, "cough_breathing":3, "body_aches":1, "loss_taste_smell":2, "fatigue":1}
     for k, w in weights.items():
         ans = symptoms.get(k)
         if ans == "Yes":
             score += w; detail[k] = w
         elif ans == "Not sure":
-            score += max(1, int(round(w*0.5))); detail[k] = max(1, int(round(w*0.5)))
+            n = max(1, int(round(w*0.5)))
+            score += n; detail[k] = n
         else:
             detail[k] = 0
 
-    # SpO2 weighting (optional)
     spo2 = symptoms.get("spo2")
     if isinstance(spo2, (int, float)):
         if spo2 < 90:
@@ -260,47 +202,32 @@ def assess_risk(symptoms: Dict) -> Tuple[str, int, Dict]:
     else:
         detail["spo2"] = 0
 
-    # Risk level
-    if score >= 9:
-        level = "high"
-    elif score >= 5:
-        level = "medium"
-    else:
-        level = "low"
-
+    level = "high" if score >= 9 else "medium" if score >= 5 else "low"
     return level, score, detail
 
 def generate_diagnosis(symptoms: Dict) -> List[Tuple]:
     other = (symptoms.get("other_symptoms") or "").lower()
     possible = []
     for disease, info in DISEASES.items():
-        matches = 0
-        weight = 0
-        # structured keys
+        matches = 0; weight = 0
         for k in info["symptom_keys"]:
             ans = symptoms.get(k)
             if ans == "Yes":
                 matches += 1; weight += 2
             elif ans == "Not sure":
                 matches += 0.5; weight += 1
-        # keyword hits from free text
         kw_hits = 0
         for kw in info["keywords"]:
             if re.search(rf"\b{re.escape(kw)}\b", other):
                 kw_hits += 1
         weight += kw_hits
         match_pct = min(100, int(round(100 * (matches / (len(info["symptom_keys"]) or 1)))))
-        possible.append((
-            disease,                       # 0
-            match_pct,                     # 1
-            info["description"],           # 2
-            info["precautions"],           # 3
-            weight                         # 4 (sort key)
-        ))
+        possible.append((disease, match_pct, info["description"], info["precautions"], weight))
     possible.sort(key=lambda x: x[4], reverse=True)
     return possible
 
-def build_treatment_plan(risk: str, top_disease: str | None) -> Dict:
+# ✅ FIXED: Python 3.8/3.9 compatible signature (Optional[str] instead of str | None)
+def build_treatment_plan(risk: str, top_disease: Optional[str]) -> Dict:
     plans = {
         "high": {
             "medication": [
@@ -341,7 +268,6 @@ def build_treatment_plan(risk: str, top_disease: str | None) -> Dict:
     }
     plan = plans[risk].copy()
 
-    # disease-specific flags
     if top_disease == "COVID-19":
         plan["monitoring"] += " Consider pulse-ox checks if available."
         plan["isolation"] = "Isolate at home; typical isolation ~10 days from symptom onset (follow local guidance)."
@@ -380,16 +306,15 @@ def page_home():
         st.markdown("Click below to begin your consultation.")
         if st.button("Start Consultation ➜"):
             st.session_state.page = "consult"
-            st.rerun()
+            do_rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
 def page_consult():
     st.markdown('<h2 class="ec-title">EpidemicCare AI Doctor</h2>', unsafe_allow_html=True)
 
-    # Sidebar actions
     with st.sidebar:
         st.markdown("### ⚙️ Settings")
-        st.session_state.voice_enabled = st.toggle("Doctor voice", value=st.session_state.voice_enabled)
+        st.session_state.voice_enabled = ui_toggle("Doctor voice", value=st.session_state.voice_enabled)
         st.caption("Uses your browser's speech synthesis.")
         st.markdown("---")
         if st.button("↻ Reset Conversation"):
@@ -398,28 +323,23 @@ def page_consult():
             st.session_state.symptoms = {}
             st.session_state.treatment_plan = {}
             st.session_state.progress_data = {"start_date": None, "daily_rating": [], "symptoms_track": [], "medication_taken": []}
-            st.rerun()
+            do_rerun()
 
-    # Chat area
     with st.container():
         show_chat()
 
-        # Ask current question
         idx = st.session_state.current_idx
         if idx < len(STEPS):
             step = STEPS[idx]
             prompt = step["prompt"]
 
-            # Only add once per step
             if not st.session_state.chat_history or st.session_state.chat_history[-1][0] != "doctor" or st.session_state.chat_history[-1][1] != prompt:
                 add_doctor(prompt)
 
-            # Voice for the newest doctor message
             if st.session_state.voice_enabled and len(st.session_state.chat_history)-1 > st.session_state.last_spoken_n:
                 speak(prompt, autostart=True)
                 st.session_state.last_spoken_n = len(st.session_state.chat_history)-1
 
-            # Input control
             st.markdown('<div class="ec-card">', unsafe_allow_html=True)
             if step["kind"] == "text":
                 val = st.text_input("Your answer", key=f"in_{step['key']}", label_visibility="collapsed")
@@ -427,7 +347,7 @@ def page_consult():
                     add_user(val if val else "(skipped)")
                     st.session_state.symptoms[step["key"]] = val.strip() if val else ""
                     st.session_state.current_idx += 1
-                    st.rerun()
+                    do_rerun()
 
             elif step["kind"] == "number":
                 minv = step.get("min", 0); maxv = step.get("max", 120)
@@ -436,7 +356,7 @@ def page_consult():
                     add_user(str(val))
                     st.session_state.symptoms[step["key"]] = int(val)
                     st.session_state.current_idx += 1
-                    st.rerun()
+                    do_rerun()
 
             elif step["kind"] == "choice":
                 choices = step["choices"]
@@ -445,19 +365,15 @@ def page_consult():
                     add_user(val)
                     st.session_state.symptoms[step["key"]] = val
                     st.session_state.current_idx += 1
-                    st.rerun()
+                    do_rerun()
             st.markdown('</div>', unsafe_allow_html=True)
         else:
-            # Finish -> compute assessment
             add_doctor("Thanks. I'm analyzing your answers…")
             risk, score, detail = assess_risk(st.session_state.symptoms)
             possible = generate_diagnosis(st.session_state.symptoms)
             top = possible[0][0] if possible else None
             plan = build_treatment_plan(risk, top)
-            st.session_state.treatment_plan = {
-                "risk": risk, "score": score, "detail": detail, "possible": possible, "plan": plan
-            }
-            # init progress
+            st.session_state.treatment_plan = {"risk": risk, "score": score, "detail": detail, "possible": possible, "plan": plan}
             if not st.session_state.progress_data["start_date"]:
                 st.session_state.progress_data["start_date"] = datetime.date.today()
             add_doctor("I've prepared a personalized care plan for you. You can review it under **Treatment Plan**.")
@@ -469,9 +385,9 @@ def page_consult():
             with colA:
                 st.success(f"Risk Level: **{st.session_state.treatment_plan['risk'].upper()}**  | Score: {st.session_state.treatment_plan['score']}")
                 if st.button("View Treatment Plan ➜"):
-                    st.session_state.page = "plan"; st.rerun()
+                    st.session_state.page = "plan"; do_rerun()
             with colB:
-                st.info("Remember: This app provides educational guidance and is **not** a medical diagnosis. Seek professional care if you're concerned.")
+                st.info("This app provides educational guidance and is **not** a medical diagnosis. Seek professional care if you're concerned.")
 
 def page_plan():
     st.markdown('<h2 class="ec-title">Your Treatment Plan</h2>', unsafe_allow_html=True)
@@ -480,7 +396,7 @@ def page_plan():
     if not data:
         st.warning("Please complete the consultation first.")
         if st.button("Go to Consultation"):
-            st.session_state.page = "consult"; st.rerun()
+            st.session_state.page = "consult"; do_rerun()
         return
 
     risk = data["risk"]; score = data["score"]; possible = data["possible"]; plan = data["plan"]
@@ -525,7 +441,7 @@ def page_plan():
 
     st.markdown('<div class="ec-card">', unsafe_allow_html=True)
     if st.button("Start Progress Tracking"):
-        st.session_state.page = "progress"; st.rerun()
+        st.session_state.page = "progress"; do_rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 def page_progress():
@@ -534,7 +450,7 @@ def page_progress():
     if not st.session_state.treatment_plan:
         st.warning("Complete the consultation to generate a plan before tracking progress.")
         if st.button("Go to Consultation"):
-            st.session_state.page = "consult"; st.rerun()
+            st.session_state.page = "consult"; do_rerun()
         return
 
     col1, col2 = st.columns([1.05,0.95])
@@ -552,7 +468,7 @@ def page_progress():
                 st.session_state.progress_data["daily_rating"].append({"date": today, "rating": rating})
                 st.session_state.progress_data["symptoms_track"].append({"date": today, "symptoms": sym})
                 st.session_state.progress_data["medication_taken"].append({"date": today, "taken": bool(taken)})
-                st.success("Saved!"); time.sleep(0.6); st.rerun()
+                st.success("Saved!"); time.sleep(0.6); do_rerun()
         else:
             st.info("You've already checked in today. Come back tomorrow.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -560,8 +476,7 @@ def page_progress():
         st.markdown('<div class="ec-card">', unsafe_allow_html=True)
         st.subheader("Symptom Severity Over Time")
         if st.session_state.progress_data["daily_rating"]:
-            df = pd.DataFrame(st.session_state.progress_data["daily_rating"])
-            df = df.sort_values("date")
+            df = pd.DataFrame(st.session_state.progress_data["daily_rating"]).sort_values("date")
             st.line_chart(df.set_index("date")["rating"])
         else:
             st.caption("No data yet.")
@@ -643,14 +558,13 @@ def page_resources():
 # -------------------- NAV / ROUTER --------------------
 with st.sidebar:
     st.markdown("## 🩺 EpidemicCare AI")
-    page = st.radio("Navigation", ["Home","Consultation","Treatment Plan","Progress","Resources"],
-                    index=["home","consult","plan","progress","resources"].index(st.session_state.page)
-                    if st.session_state.page in ["home","consult","plan","progress","resources"] else 0)
-    if page == "Home": st.session_state.page = "home"
-    elif page == "Consultation": st.session_state.page = "consult"
-    elif page == "Treatment Plan": st.session_state.page = "plan"
-    elif page == "Progress": st.session_state.page = "progress"
-    else: st.session_state.page = "resources"
+    page = st.radio(
+        "Navigation",
+        ["Home","Consultation","Treatment Plan","Progress","Resources"],
+        index=["home","consult","plan","progress","resources"].index(st.session_state.page)
+        if st.session_state.page in ["home","consult","plan","progress","resources"] else 0
+    )
+    st.session_state.page = {"Home":"home","Consultation":"consult","Treatment Plan":"plan","Progress":"progress","Resources":"resources"}[page]
 
 if st.session_state.page == "home":
     page_home()
